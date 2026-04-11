@@ -53,9 +53,15 @@ export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
   }, []);
 
   useEffect(() => {
+    // Week resets every Friday — use last Friday's date as the week ID
     const now = new Date();
-    const week = Math.ceil((now.getDate() + new Date(now.getFullYear(), now.getMonth(), 1).getDay()) / 7);
-    const wId = `${now.getFullYear()}-W${String(week).padStart(2, '0')}`;
+    const daysBack = (now.getDay() + 2) % 7; // Fri=0, Sat=1, Sun=2, Mon=3...
+    const lastFriday = new Date(now);
+    lastFriday.setDate(now.getDate() - daysBack);
+    const y = lastFriday.getFullYear();
+    const m = String(lastFriday.getMonth() + 1).padStart(2, '0');
+    const d = String(lastFriday.getDate()).padStart(2, '0');
+    const wId = `${y}-F${m}-${d}`;
     setWeekId(wId);
 
     fetchTasks();

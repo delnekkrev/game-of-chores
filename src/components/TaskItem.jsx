@@ -23,8 +23,13 @@ export default function TaskItem({ task, player, onComplete }) {
 
     try {
       const now = new Date();
-      const week = Math.ceil((now.getDate() + new Date(now.getFullYear(), now.getMonth(), 1).getDay()) / 7);
-      const weekId = `${now.getFullYear()}-W${String(week).padStart(2, '0')}`;
+      const daysBack = (now.getDay() + 2) % 7; // Fri=0, Sat=1, Sun=2, Mon=3...
+      const lastFriday = new Date(now);
+      lastFriday.setDate(now.getDate() - daysBack);
+      const y = lastFriday.getFullYear();
+      const m = String(lastFriday.getMonth() + 1).padStart(2, '0');
+      const d = String(lastFriday.getDate()).padStart(2, '0');
+      const weekId = `${y}-F${m}-${d}`;
 
       let playerId = player.dbId;
       if (!playerId) {
