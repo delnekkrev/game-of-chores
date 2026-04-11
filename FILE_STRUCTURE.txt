@@ -1,0 +1,48 @@
+📦 Chore Reward Game - Complete Project Structure
+================================================
+
+PROJECT ROOT: /Rewardy-Chores/
+
+📄 Documentation
+  ├── README.md                 ← Start here! Full overview
+  ├── SETUP_GUIDE.md           ← Detailed setup instructions
+  ├── QUICK_START.md           ← Quick checklist (5-min setup)
+  ├── FILE_STRUCTURE.txt       ← This file
+  └── chore_game_task_plan.xlsx ← All 96 tasks + point values
+
+⚙️ Configuration
+  ├── .env.example             ← Copy to .env.local
+  ├── .gitignore
+  ├── package.json             ← Dependencies (npm install)
+  ├── tailwind.config.js       ← Tailwind CSS config
+  ├── netlify.toml             ← Netlify deployment config
+  └── INSERT_TASKS.sql         ← SQL to insert 96 tasks into DB
+
+🎨 React App (Frontend)
+  ├── index.js                 ← React entry point
+  ├── index.css                ← Global styles + Tailwind
+  ├── App.jsx                  ← Main app component + Supabase init
+  │
+  └── 📁 components/           ← All React components
+      ├── SignIn.jsx           ← Sign-in page (name only)
+      ├── Dashboard.jsx        ← Main dashboard view
+      ├── Leaderboard.jsx      ← Leaderboard + motivation
+      ├── TaskList.jsx         ← Task list grouped by category
+      └── TaskItem.jsx         ← Individual task button + animations
+
+🌐 Public/Static
+  └── 📁 public/
+      └── index.html           ← HTML entry point
+
+---
+
+QUICK SETUP SUMMARY
+===================
+
+1. Supabase: Create DB + insert SQL from SETUP_GUIDE.md
+2. Local: npm install, add .env.local, npm start
+3. Netlify: npm run build, deploy + add environment variables
+
+See QUICK_START.md for checklist!
+
+---
