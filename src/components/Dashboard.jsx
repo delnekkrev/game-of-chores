@@ -44,7 +44,6 @@ export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
   const [editPhoto, setEditPhoto] = useState(player.photo || null);
   const [editPhotoData, setEditPhotoData] = useState(player.photoData || null);
   const [savingProfile, setSavingProfile] = useState(false);
-  const [completedOpen, setCompletedOpen] = useState(true);
 
   const greeting = useMemo(() => {
     const fn = GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
@@ -75,7 +74,12 @@ export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_scores' }, () => fetchScores(wId))
       .subscribe();
 
-    return () => channel.unsubscribe();
+    const completionsChannel = supabase
+      .channel('completions-feed')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'completions' }, () => fetchCompletions(wId))
+      .subscribe();
+
+    return () => { channel.unsubscribe(); completionsChannel.unsubscribe(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -203,6 +207,25 @@ export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
       .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at));
   }, [completions, allPlayers, tasks, player.name]);
 
+  const todayAllCompletions = useMemo(() => {
+    const todayStr = new Date().toDateString();
+    return completions
+      .filter(c => new Date(c.completed_at).toDateString() === todayStr)
+      .map(c => {
+        const task = tasks.find(t => t.id === c.task_id);
+        const p = allPlayers.find(p => p.id === c.player_id);
+        return task && p ? { ...c, taskName: task.name, taskPoints: task.points, playerName: p.name } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at));
+  }, [completions, allPlayers, tasks]);
+
+  const miniLeaderboard = useMemo(() => {
+    return allPlayers
+      .map(p => ({ ...p, points: scores[p.id] || 0 }))
+      .sort((a, b) => b.points - a.points);
+  }, [allPlayers, scores]);
+
   const playerPhoto = getPlayerPhoto(player.name, player.photo, player.photoData);
 
   // Current player's weekly points
@@ -298,39 +321,97 @@ export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
               </div>
             </div>
 
-            {/* Completed Today */}
-            {todayCompletions.length > 0 ? (
+            {/* Mini Leaderboard */}
+            {miniLeaderboard.length > 0 && (
               <div className="bg-gray-800 rounded-xl border border-gray-700/50 overflow-hidden">
-                <button onClick={() => setCompletedOpen(o => !o)}
-                  className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-700/40 transition-colors">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-white">✅ Completed Today</span>
-                    <span className="text-xs bg-green-900/60 text-green-400 font-semibold px-2 py-0.5 rounded-full">{todayCompletions.length}</span>
-                  </div>
-                  <span className={`text-gray-500 text-xs transition-transform duration-200 ${completedOpen ? 'rotate-180' : ''}`}>▼</span>
-                </button>
-                {completedOpen && (
-                  <div className="px-4 pb-4 space-y-2 border-t border-gray-700/50 pt-3">
-                    {todayCompletions.map(c => (
-                      <div key={c.id} className="flex items-center justify-between bg-green-900/20 border border-green-800/30 rounded-lg px-3 py-2">
-                        <div>
-                          <p className="text-sm font-semibold text-gray-200">{c.taskName}</p>
-                          <p className="text-xs text-green-400">+{c.taskPoints} pts</p>
+                <div className="px-4 py-3 border-b border-gray-700/30 flex items-center justify-between">
+                  <h3 className="font-bold text-white text-sm">🏆 Standings</h3>
+                  <button onClick={() => setActiveTab('scores')} className="text-xs text-purple-400 hover:text-purple-300 transition-colors">Full view →</button>
+                </div>
+                <div className="divide-y divide-gray-700/30">
+                  {miniLeaderboard.map((entry, idx) => {
+                    const medals = ['🥇', '🥈', '🥉'];
+                    const isMe = entry.name === player.name;
+                    const photo = getPlayerPhoto(entry.name, isMe ? player.photo : null, isMe ? player.photoData : null);
+                    return (
+                      <div key={entry.id} className={`flex items-center gap-3 px-4 py-2.5 ${isMe ? 'bg-purple-900/20' : ''}`}>
+                        <span className="text-base w-6 text-center">{medals[idx] || `#${idx + 1}`}</span>
+                        <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 bg-gray-600">
+                          {photo
+                            ? <img src={photo} alt={entry.name} className="w-full h-full object-cover" />
+                            : <div className="w-full h-full flex items-center justify-center text-sm">👤</div>}
                         </div>
-                        <button onClick={() => handleDeleteCompletion(c.task_id, c.taskPoints)}
-                          className="text-red-400 hover:text-red-300 text-lg leading-none px-1 transition-colors" title="Remove">🗑️</button>
+                        <span className={`flex-1 text-sm font-semibold ${isMe ? 'text-purple-300' : 'text-gray-300'}`}>{entry.name}</span>
+                        <span className={`text-sm font-bold ${entry.points > 0 ? 'text-white' : 'text-gray-600'}`}>
+                          {entry.points > 0 ? `${entry.points} pts` : '—'}
+                        </span>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="bg-gray-800 rounded-xl border border-gray-700/50 p-6 text-center">
-                <p className="text-2xl mb-2">😴</p>
-                <p className="text-gray-400 text-sm">No tasks completed today yet.</p>
-                <p className="text-gray-600 text-xs mt-1">Head to Chores and get some points!</p>
+                    );
+                  })}
+                </div>
               </div>
             )}
+
+            {/* Today's Activity — all players */}
+            {(() => {
+              const byPlayer = {};
+              todayAllCompletions.forEach(c => {
+                if (!byPlayer[c.playerName]) byPlayer[c.playerName] = [];
+                byPlayer[c.playerName].push(c);
+              });
+              const hasActivity = Object.keys(byPlayer).length > 0;
+              return (
+                <div className="bg-gray-800 rounded-xl border border-gray-700/50 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-gray-700/30 flex items-center gap-2">
+                    <h3 className="font-bold text-white text-sm">👥 Today's Activity</h3>
+                    {todayAllCompletions.length > 0 && (
+                      <span className="text-xs bg-green-900/60 text-green-400 font-semibold px-2 py-0.5 rounded-full">{todayAllCompletions.length}</span>
+                    )}
+                  </div>
+                  {hasActivity ? (
+                    Object.entries(byPlayer).map(([name, playerTasks]) => {
+                      const isMe = name === player.name;
+                      const photo = getPlayerPhoto(name, isMe ? player.photo : null, isMe ? player.photoData : null);
+                      return (
+                        <div key={name} className="border-b border-gray-700/30 last:border-0">
+                          <div className={`flex items-center gap-2 px-4 py-2.5 ${isMe ? 'bg-purple-900/10' : ''}`}>
+                            <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 bg-gray-600">
+                              {photo
+                                ? <img src={photo} alt={name} className="w-full h-full object-cover" />
+                                : <div className="w-full h-full flex items-center justify-center text-xs">👤</div>}
+                            </div>
+                            <span className={`text-sm font-bold ${isMe ? 'text-purple-300' : 'text-gray-200'}`}>{name}</span>
+                            <span className="text-xs bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded-full ml-1">
+                              {playerTasks.length} task{playerTasks.length !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+                          <div className="px-4 pb-3 space-y-1.5">
+                            {playerTasks.map(c => (
+                              <div key={c.id} className="flex items-center justify-between bg-gray-700/40 rounded-lg px-3 py-1.5">
+                                <span className="text-xs text-gray-300 flex-1 mr-2">{c.taskName}</span>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  <span className="text-xs text-green-400 font-semibold">+{c.taskPoints}</span>
+                                  {isMe && (
+                                    <button onClick={() => handleDeleteCompletion(c.task_id, c.taskPoints)}
+                                      className="text-red-500 hover:text-red-400 text-sm transition-colors" title="Remove">🗑️</button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="p-6 text-center">
+                      <p className="text-2xl mb-2">😴</p>
+                      <p className="text-gray-400 text-sm">No tasks completed today yet.</p>
+                      <p className="text-gray-600 text-xs mt-1">Head to Chores and get some points!</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
 

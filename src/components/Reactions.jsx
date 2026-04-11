@@ -55,7 +55,7 @@ export default function Reactions({ player }) {
 
   return (
     <div className="bg-gray-800 rounded-2xl p-4 shadow-lg border border-gray-700/50">
-      <h2 className="font-bold text-white mb-4">⚡ Team Hype</h2>
+      <h2 className="text-lg font-bold text-white mb-4">⚡ Team Hype</h2>
 
       {!tableReady ? (
         <div className="text-center py-4">
@@ -95,7 +95,7 @@ export default function Reactions({ player }) {
             <input
               type="text"
               value={message}
-              onChange={e => setMessage(e.target.value.slice(0, 40))}
+              onChange={e => setMessage(e.target.value.slice(0, 100))}
               onKeyDown={e => e.key === 'Enter' && sendReaction()}
               placeholder="Add a message... (optional)"
               className="flex-1 px-3 py-2 rounded-lg bg-gray-700 text-gray-200 text-sm border border-gray-600 focus:outline-none focus:border-purple-500 placeholder-gray-500 min-w-0"
@@ -111,27 +111,28 @@ export default function Reactions({ player }) {
 
           {/* Feed */}
           {reactions.length > 0 ? (
-            <div className="space-y-2 max-h-52 overflow-y-auto">
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
               {reactions.map(r => {
                 const photo = getPlayerPhoto(r.sender_name, null, r.sender_name === player.name ? player.photoData : null);
+                const isMe = r.sender_name === player.name;
                 return (
-                  <div key={r.id} className="flex items-center gap-2 bg-gray-700/50 rounded-xl px-3 py-2 border border-gray-700/30">
-                    <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 bg-gray-600">
+                  <div key={r.id} className={`flex items-start gap-3 rounded-xl px-3 py-3 border ${isMe ? 'bg-purple-900/20 border-purple-700/30' : 'bg-gray-700/50 border-gray-700/30'}`}>
+                    <div className="w-9 h-9 rounded-full overflow-hidden flex-shrink-0 bg-gray-600 mt-0.5">
                       {photo
                         ? <img src={photo} alt={r.sender_name} className="w-full h-full object-cover" />
                         : <div className="w-full h-full flex items-center justify-center text-sm">👤</div>
                       }
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-baseline gap-1 flex-wrap">
-                        <span className="text-xs font-bold text-gray-200">{r.sender_name}</span>
-                        <span className="text-xs text-gray-600">→</span>
-                        <span className="text-xs text-gray-400">{r.target_name}</span>
-                        <span className="text-base leading-none">{r.emoji}</span>
+                      <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                        <span className="text-sm font-bold text-white">{r.sender_name}</span>
+                        <span className="text-xs text-gray-500">→</span>
+                        <span className="text-sm font-semibold text-purple-300">{r.target_name}</span>
+                        <span className="text-base leading-none ml-0.5">{r.emoji}</span>
                       </div>
-                      {r.message && <p className="text-xs text-gray-500 truncate">"{r.message}"</p>}
+                      {r.message && <p className="text-sm text-gray-300 break-words leading-snug">"{r.message}"</p>}
+                      <p className="text-xs text-gray-500 mt-1">{timeAgo(r.created_at)}</p>
                     </div>
-                    <span className="text-xs text-gray-600 flex-shrink-0">{timeAgo(r.created_at)}</span>
                   </div>
                 );
               })}
