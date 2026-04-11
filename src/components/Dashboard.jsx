@@ -3,7 +3,8 @@ import { supabase } from '../App';
 import Leaderboard from './Leaderboard';
 import TaskList from './TaskList';
 import Reactions from './Reactions';
-import { ALL_PHOTOS, getPlayerPhoto } from '../profileConfig';
+import Challenges from './Challenges';
+import { ALL_PHOTOS, getPlayerPhoto, PROFILE_NAMES } from '../profileConfig';
 
 const GREETINGS = [
   (name) => `Oh look, ${name} finally showed up 👀`,
@@ -24,10 +25,20 @@ const NEW_TASKS = [
   { name: 'Give Mom a Massage', category: 'Self Care', difficulty: 'Medium', points: 20 },
 ];
 
+const WINNER_MESSAGES = [
+  n => `${n} absolutely COOKED this week 🔥 The chores never stood a chance.`,
+  n => `${n} wins! The rest of y'all... we need to talk. 👀`,
+  n => `${n} has been crowned the Chore Champion! Bow down. 👑`,
+  n => `It's official — ${n} is built different. Certified chore beast. 🐐`,
+  n => `${n} said "let me show y'all how it's done" and DELIVERED. 🫡`,
+  n => `${n} wins this week! Someone get this legend a trophy and a nap. 😴🏆`,
+];
+
 const TABS = [
-  { id: 'home',   icon: '🏠', label: 'Home' },
-  { id: 'scores', icon: '🏆', label: 'Scores' },
-  { id: 'chores', icon: '✅', label: 'Chores' },
+  { id: 'home',       icon: '🏠', label: 'Home' },
+  { id: 'scores',     icon: '🏆', label: 'Scores' },
+  { id: 'challenges', icon: '⚔️',  label: 'Challenges' },
+  { id: 'chores',     icon: '✅', label: 'Chores' },
 ];
 
 export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
@@ -44,6 +55,8 @@ export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
   const [editPhoto, setEditPhoto] = useState(player.photo || null);
   const [editPhotoData, setEditPhotoData] = useState(player.photoData || null);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [showWinnerModal, setShowWinnerModal] = useState(false);
+  const [winner, setWinner] = useState(null);
 
   const greeting = useMemo(() => {
     const fn = GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
@@ -82,6 +95,25 @@ export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
     return () => { channel.unsubscribe(); completionsChannel.unsubscribe(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Friday 5pm NYC winner announcement
+  useEffect(() => {
+    if (!weekId || allPlayers.length === 0) return;
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', hour12: false,
+    }).formatToParts(new Date());
+    const weekday = parts.find(p => p.type === 'weekday')?.value;
+    const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
+    if (weekday !== 'Fri' || hour < 17) return;
+    if (localStorage.getItem(`winner_dismissed_${weekId}`)) return;
+    const leader = allPlayers
+      .filter(p => PROFILE_NAMES.includes(p.name))
+      .map(p => ({ ...p, points: scores[p.id] || 0 }))
+      .sort((a, b) => b.points - a.points)[0];
+    if (!leader || leader.points === 0) return;
+    setWinner(leader);
+    setShowWinnerModal(true);
+  }, [weekId, allPlayers, scores]);
 
   const seedNewTasks = async () => {
     for (const task of NEW_TASKS) {
@@ -222,6 +254,7 @@ export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
 
   const miniLeaderboard = useMemo(() => {
     return allPlayers
+      .filter(p => PROFILE_NAMES.includes(p.name))
       .map(p => ({ ...p, points: scores[p.id] || 0 }))
       .sort((a, b) => b.points - a.points);
   }, [allPlayers, scores]);
@@ -300,6 +333,41 @@ export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
           </div>
         </div>
       )}
+
+      {/* Winner Announcement Modal */}
+      {showWinnerModal && winner && (() => {
+        const msgIdx = weekId.charCodeAt(weekId.length - 1) % WINNER_MESSAGES.length;
+        const message = WINNER_MESSAGES[msgIdx](winner.name);
+        const photo = getPlayerPhoto(winner.name, winner.name === player.name ? player.photo : null, winner.name === player.name ? player.photoData : null);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 px-4">
+            <div className="bg-gray-900 border-2 border-yellow-500/40 rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-b from-yellow-500/10 to-transparent pointer-events-none" />
+              <div className="text-6xl mb-2 animate-bounce">🏆</div>
+              <div className="flex justify-center gap-1 mb-4">
+                {[0,1,2,3,4].map(i => (
+                  <span key={i} className="text-xl animate-pulse" style={{ animationDelay: `${i * 0.15}s` }}>⭐</span>
+                ))}
+              </div>
+              <p className="text-yellow-400 font-bold text-xs uppercase tracking-widest mb-4">🎉 Week Winner 🎉</p>
+              <div className="w-24 h-24 rounded-full overflow-hidden ring-4 ring-yellow-400 mx-auto mb-4 shadow-lg shadow-yellow-500/30">
+                {photo
+                  ? <img src={photo} alt={winner.name} className="w-full h-full object-cover" />
+                  : <div className="w-full h-full bg-gradient-to-br from-yellow-400 to-orange-500 flex items-center justify-center text-4xl">👑</div>}
+              </div>
+              <h2 className="text-4xl font-black text-white mb-1">{winner.name}</h2>
+              <p className="text-yellow-400 text-2xl font-bold mb-5">{winner.points} pts</p>
+              <p className="text-gray-300 text-sm mb-7 italic leading-relaxed px-2">"{message}"</p>
+              <button
+                onClick={() => { setShowWinnerModal(false); localStorage.setItem(`winner_dismissed_${weekId}`, '1'); }}
+                className="w-full py-4 bg-gradient-to-r from-yellow-500 to-orange-500 text-white font-black rounded-2xl text-base hover:opacity-90 active:scale-95 transition-all shadow-lg shadow-orange-500/30"
+              >
+                🎉 Let's GOOO!
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Tab Content */}
       <div className="px-4 pt-4 max-w-2xl mx-auto">
@@ -421,6 +489,11 @@ export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
             <Leaderboard scores={scores} player={player} />
             <Reactions player={player} />
           </div>
+        )}
+
+        {/* ── CHALLENGES TAB ── */}
+        {activeTab === 'challenges' && (
+          <Challenges player={player} weekId={weekId} />
         )}
 
         {/* ── CHORES TAB ── */}
