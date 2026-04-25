@@ -1,557 +1,328 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { supabase } from '../App';
-import Leaderboard from './Leaderboard';
-import TaskList from './TaskList';
-import Reactions from './Reactions';
-import Challenges from './Challenges';
-import { ALL_PHOTOS, getPlayerPhoto, PROFILE_NAMES } from '../profileConfig';
+import React, { useEffect, useState, useCallback } from 'react';
+import { supabase, KID_NAME, DAILY_TASKS, MAX_POINTS, PARENT_PIN } from '../App';
+import ParentView from './Leaderboard';
+import TaskSection from './TaskList';
 
-const GREETINGS = [
-  (name) => `Oh look, ${name} finally showed up 👀`,
-  (name) => `${name} has entered the chat 🎉`,
-  (name) => `Warning: ${name} is about to be productive 💪`,
-  (name) => `The legend ${name} has arrived 🦁`,
-  (name) => `${name} is here! Hide the mess 🙈`,
-  (name) => `Look who decided to do chores today... ${name}! 🧹`,
-  (name) => `${name} loading... chore mode activated 🤖`,
-  (name) => `Uh oh, ${name}'s here. Someone's getting points 😤`,
-  (name) => `${name}, your chores won't do themselves (trust me, we checked) 😅`,
-  (name) => `${name} has spawned into the chore dimension 🌀`,
-];
+function getTodayId() {
+  return new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+}
 
-const NEW_TASKS = [
-  { name: 'Cook a Meal', category: 'House - Kitchen & Dining', difficulty: 'Hard', points: 40 },
-  { name: 'Make a TikTok Video', category: 'Creative', difficulty: 'Hard', points: 40 },
-  { name: 'Give Mom a Massage', category: 'Self Care', difficulty: 'Medium', points: 20 },
-];
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return '☀️ Good morning';
+  if (h < 17) return '⚡ Good afternoon';
+  return '🌙 Good evening';
+}
 
-const WINNER_MESSAGES = [
-  n => `${n} absolutely COOKED this week 🔥 The chores never stood a chance.`,
-  n => `${n} wins! The rest of y'all... we need to talk. 👀`,
-  n => `${n} has been crowned the Chore Champion! Bow down. 👑`,
-  n => `It's official — ${n} is built different. Certified chore beast. 🐐`,
-  n => `${n} said "let me show y'all how it's done" and DELIVERED. 🫡`,
-  n => `${n} wins this week! Someone get this legend a trophy and a nap. 😴🏆`,
-];
+function getProgressEmoji(pct) {
+  if (pct >= 100) return '🏆';
+  if (pct >= 75)  return '🔥';
+  if (pct >= 50)  return '⚡';
+  if (pct >= 25)  return '💪';
+  return '🎮';
+}
 
-const TABS = [
-  { id: 'home',       icon: '🏠', label: 'Home' },
-  { id: 'scores',     icon: '🏆', label: 'Scores' },
-  { id: 'challenges', icon: '⚔️',  label: 'Challenges' },
-  { id: 'chores',     icon: '✅', label: 'Chores' },
-];
+function getProgressGradient(pct) {
+  if (pct >= 100) return 'linear-gradient(to right, #f59e0b, #fbbf24, #fcd34d)';
+  if (pct >= 75)  return 'linear-gradient(to right, #22c55e, #4ade80)';
+  if (pct >= 50)  return 'linear-gradient(to right, #3b82f6, #60a5fa)';
+  return 'linear-gradient(to right, #6366f1, #818cf8)';
+}
 
-export default function Dashboard({ player, onSignOut, onUpdatePlayer }) {
-  const [scores, setScores] = useState({});
-  const [tasks, setTasks] = useState([]);
-  const [completions, setCompletions] = useState([]);
-  const [selectedCategory, setSelectedCategory] = useState('All');
-  const [weekId, setWeekId] = useState('');
-  const [activeTab, setActiveTab] = useState('home');
-  const [allPlayers, setAllPlayers] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [editingProfile, setEditingProfile] = useState(false);
-  const [editName, setEditName] = useState(player.name);
-  const [editPhoto, setEditPhoto] = useState(player.photo || null);
-  const [editPhotoData, setEditPhotoData] = useState(player.photoData || null);
-  const [savingProfile, setSavingProfile] = useState(false);
-  const [showWinnerModal, setShowWinnerModal] = useState(false);
-  const [winner, setWinner] = useState(null);
+export default function Dashboard() {
+  const [completed,     setCompleted]     = useState(new Set());
+  const [loading,       setLoading]       = useState(true);
+  const [dbError,       setDbError]       = useState(false);
+  const [mode,          setMode]          = useState('kid');   // 'kid' | 'parent'
+  const [pinInput,      setPinInput]      = useState('');
+  const [pinError,      setPinError]      = useState('');
+  const [showPinModal,  setShowPinModal]  = useState(false);
+  const [streak,        setStreak]        = useState(0);
+  const [justChecked,   setJustChecked]   = useState(null);
 
-  const greeting = useMemo(() => {
-    const fn = GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
-    return fn(player.name);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const todayId = getTodayId();
 
-  useEffect(() => {
-    // Week resets every Friday — use last Friday's date as the week ID
-    const now = new Date();
-    const daysBack = (now.getDay() + 2) % 7; // Fri=0, Sat=1, Sun=2, Mon=3...
-    const lastFriday = new Date(now);
-    lastFriday.setDate(now.getDate() - daysBack);
-    const y = lastFriday.getFullYear();
-    const m = String(lastFriday.getMonth() + 1).padStart(2, '0');
-    const d = String(lastFriday.getDate()).padStart(2, '0');
-    const wId = `${y}-F${m}-${d}`;
-    setWeekId(wId);
+  // ── Fetch today's completions ──────────────────────────────
+  const fetchToday = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('daily_completions')
+        .select('task_id')
+        .eq('date_id', todayId);
 
-    fetchTasks();
-    fetchScores(wId);
-    fetchAllPlayers();
-    fetchCompletions(wId);
-    seedNewTasks();
-
-    const channel = supabase
-      .channel('weekly_scores')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_scores' }, () => fetchScores(wId))
-      .subscribe();
-
-    const completionsChannel = supabase
-      .channel('completions-feed')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'completions' }, () => fetchCompletions(wId))
-      .subscribe();
-
-    return () => { channel.unsubscribe(); completionsChannel.unsubscribe(); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Friday 5pm NYC winner announcement
-  useEffect(() => {
-    if (!weekId || allPlayers.length === 0) return;
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', hour12: false,
-    }).formatToParts(new Date());
-    const weekday = parts.find(p => p.type === 'weekday')?.value;
-    const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
-    if (weekday !== 'Fri' || hour < 17) return;
-    if (localStorage.getItem(`winner_dismissed_${weekId}`)) return;
-    const leader = allPlayers
-      .filter(p => PROFILE_NAMES.includes(p.name))
-      .map(p => ({ ...p, points: scores[p.id] || 0 }))
-      .sort((a, b) => b.points - a.points)[0];
-    if (!leader || leader.points === 0) return;
-    setWinner(leader);
-    setShowWinnerModal(true);
-  }, [weekId, allPlayers, scores]);
-
-  const seedNewTasks = async () => {
-    for (const task of NEW_TASKS) {
-      const { data } = await supabase.from('tasks').select('id').eq('name', task.name);
-      if (!data || data.length === 0) await supabase.from('tasks').insert([task]);
+      if (error) { setDbError(true); }
+      else        { setCompleted(new Set((data || []).map(c => c.task_id))); }
+    } catch {
+      setDbError(true);
     }
-    fetchTasks();
-  };
+    setLoading(false);
+  }, [todayId]);
 
-  const fetchTasks = async () => {
-    const { data, error } = await supabase.from('tasks').select('*');
-    if (!error && data) {
-      const seen = new Set();
-      setTasks(data.filter(t => { if (seen.has(t.name)) return false; seen.add(t.name); return true; }));
-    }
-  };
+  // ── Fetch streak (consecutive prior days with any activity) ─
+  const fetchStreak = useCallback(async () => {
+    const past = Array.from({ length: 30 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (i + 1));
+      return d.toISOString().split('T')[0];
+    });
 
-  const fetchScores = async (wId) => {
-    const { data, error } = await supabase.from('weekly_scores').select('*').eq('week_id', wId);
-    if (!error && data) {
-      const scoreMap = {};
-      data.forEach(s => { scoreMap[s.player_id] = s.total_points; });
-      setScores(scoreMap);
-    }
-  };
+    const { data } = await supabase
+      .from('daily_completions')
+      .select('date_id')
+      .in('date_id', past);
 
-  const fetchAllPlayers = async () => {
-    const { data, error } = await supabase.from('players').select('*');
-    if (!error && data) setAllPlayers(data);
-  };
-
-  const fetchCompletions = async (wId) => {
-    const { data, error } = await supabase.from('completions').select('*').eq('week_id', wId);
-    if (!error && data) setCompletions(data);
-  };
-
-  const handleDeleteCompletion = async (taskId, taskPoints) => {
-    const dbPlayer = allPlayers.find(p => p.name === player.name);
-    if (!dbPlayer) return;
-    const completion = completions
-      .filter(c => c.player_id === dbPlayer.id && c.task_id === taskId)
-      .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at))[0];
-    if (!completion) return;
-    await supabase.from('completions').delete().eq('id', completion.id);
-    const { data: existingScore } = await supabase
-      .from('weekly_scores').select('id, total_points')
-      .eq('player_id', dbPlayer.id).eq('week_id', weekId).single();
-    if (existingScore) {
-      const newTotal = existingScore.total_points - taskPoints;
-      if (newTotal <= 0) await supabase.from('weekly_scores').delete().eq('id', existingScore.id);
-      else await supabase.from('weekly_scores').update({ total_points: newTotal }).eq('id', existingScore.id);
-    }
-    fetchScores(weekId);
-    fetchCompletions(weekId);
-  };
-
-  const handleDeleteAccount = async () => {
-    if (!window.confirm(`Delete your account "${player.name}"? This will permanently remove all your progress.`)) return;
-    const dbPlayer = allPlayers.find(p => p.name === player.name);
-    if (dbPlayer) await supabase.from('players').delete().eq('id', dbPlayer.id);
-    onSignOut();
-  };
-
-  const resizeImage = (file) => new Promise((resolve) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const MAX = 300;
-      let { width, height } = img;
-      if (width > MAX || height > MAX) {
-        const ratio = Math.min(MAX / width, MAX / height);
-        width = Math.floor(width * ratio); height = Math.floor(height * ratio);
+    if (data) {
+      const active = new Set(data.map(c => c.date_id));
+      let s = 0;
+      for (const dateStr of past) {
+        if (active.has(dateStr)) s++;
+        else break;
       }
-      const canvas = document.createElement('canvas');
-      canvas.width = width; canvas.height = height;
-      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL('image/jpeg', 0.8));
-    };
-    img.src = url;
-  });
+      setStreak(s);
+    }
+  }, []);
 
-  const handlePhotoUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const data = await resizeImage(file);
-    setEditPhotoData(data);
-    setEditPhoto(null);
+  useEffect(() => {
+    fetchToday();
+    fetchStreak();
+  }, [fetchToday, fetchStreak]);
+
+  // ── Toggle a task on/off ───────────────────────────────────
+  const handleToggle = async (taskId) => {
+    const wasCompleted = completed.has(taskId);
+
+    // Optimistic UI
+    setCompleted(prev => {
+      const next = new Set(prev);
+      if (wasCompleted) { next.delete(taskId); }
+      else              { next.add(taskId); setJustChecked(taskId); setTimeout(() => setJustChecked(null), 400); }
+      return next;
+    });
+
+    if (!wasCompleted) {
+      const { error } = await supabase
+        .from('daily_completions')
+        .insert([{ task_id: taskId, date_id: todayId }]);
+
+      if (error) {
+        // Revert
+        setCompleted(prev => { const n = new Set(prev); n.delete(taskId); return n; });
+      }
+    } else {
+      const { error } = await supabase
+        .from('daily_completions')
+        .delete()
+        .eq('task_id', taskId)
+        .eq('date_id', todayId);
+
+      if (error) {
+        // Revert
+        setCompleted(prev => new Set([...prev, taskId]));
+      }
+    }
   };
 
-  const handleSaveProfile = async () => {
-    const trimmedName = editName.trim();
-    if (!trimmedName || trimmedName.length < 2) return;
-    setSavingProfile(true);
-    if (trimmedName !== player.name) {
-      const dbPlayer = allPlayers.find(p => p.name === player.name);
-      if (dbPlayer) await supabase.from('players').update({ name: trimmedName }).eq('id', dbPlayer.id);
+  // ── Parent PIN ─────────────────────────────────────────────
+  const closePinModal = () => { setShowPinModal(false); setPinInput(''); setPinError(''); };
+
+  const handleParentUnlock = () => {
+    if (pinInput === PARENT_PIN) {
+      setMode('parent');
+      closePinModal();
+    } else {
+      setPinError('Wrong PIN — try again!');
+      setPinInput('');
     }
-    onUpdatePlayer({ name: trimmedName, photo: editPhotoData ? null : editPhoto, photoData: editPhotoData || null });
-    setSavingProfile(false);
-    setEditingProfile(false);
   };
 
-  const categories = ['All', ...new Set(tasks.map(t => t.category))];
+  // ── Derived values ─────────────────────────────────────────
+  const totalPoints  = DAILY_TASKS.filter(t => completed.has(t.id)).reduce((s, t) => s + t.points, 0);
+  const progressPct  = Math.min(100, Math.round((totalPoints / MAX_POINTS) * 100));
+  const morningTasks   = DAILY_TASKS.filter(t => t.time === 'morning');
+  const afternoonTasks = DAILY_TASKS.filter(t => t.time === 'afternoon');
+  const eveningTasks   = DAILY_TASKS.filter(t => t.time === 'evening');
 
-  const filteredTasks = useMemo(() => {
-    let list = selectedCategory === 'All' ? tasks : tasks.filter(t => t.category === selectedCategory);
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
-      list = list.filter(t => t.name.toLowerCase().includes(q));
-    }
-    return list;
-  }, [tasks, selectedCategory, searchQuery]);
+  // ── Render: parent mode ────────────────────────────────────
+  if (mode === 'parent') {
+    return <ParentView onBack={() => setMode('kid')} />;
+  }
 
-  const todayCompletions = useMemo(() => {
-    const dbPlayer = allPlayers.find(p => p.name === player.name);
-    if (!dbPlayer) return [];
-    const todayStr = new Date().toDateString();
-    return completions
-      .filter(c => c.player_id === dbPlayer.id && new Date(c.completed_at).toDateString() === todayStr)
-      .map(c => { const task = tasks.find(t => t.id === c.task_id); return task ? { ...c, taskName: task.name, taskPoints: task.points } : null; })
-      .filter(Boolean)
-      .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at));
-  }, [completions, allPlayers, tasks, player.name]);
+  // ── Render: loading ────────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-slate-900">
+        <div className="text-center">
+          <div className="text-5xl mb-4 animate-pulse">🎮</div>
+          <p className="text-white text-lg font-bold">Loading your missions...</p>
+        </div>
+      </div>
+    );
+  }
 
-  const todayAllCompletions = useMemo(() => {
-    const todayStr = new Date().toDateString();
-    return completions
-      .filter(c => new Date(c.completed_at).toDateString() === todayStr)
-      .map(c => {
-        const task = tasks.find(t => t.id === c.task_id);
-        const p = allPlayers.find(p => p.id === c.player_id);
-        return task && p ? { ...c, taskName: task.name, taskPoints: task.points, playerName: p.name } : null;
-      })
-      .filter(Boolean)
-      .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at));
-  }, [completions, allPlayers, tasks]);
+  // ── Render: DB not set up ──────────────────────────────────
+  if (dbError) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4">
+        <div className="bg-slate-800 rounded-2xl p-6 max-w-sm text-center border border-red-500/30 text-white">
+          <div className="text-4xl mb-3">⚠️</div>
+          <h2 className="font-bold text-lg mb-2">Database Not Ready</h2>
+          <p className="text-slate-400 text-sm mb-3">
+            Create the <code className="text-yellow-400">daily_completions</code> table in Supabase
+            by running the SQL in <strong>SETUP_DB.sql</strong>.
+          </p>
+          <p className="text-slate-500 text-xs">Also check your .env file has the right Supabase keys.</p>
+        </div>
+      </div>
+    );
+  }
 
-  const miniLeaderboard = useMemo(() => {
-    return allPlayers
-      .filter(p => PROFILE_NAMES.includes(p.name))
-      .map(p => ({ ...p, points: scores[p.id] || 0 }))
-      .sort((a, b) => b.points - a.points);
-  }, [allPlayers, scores]);
-
-  const playerPhoto = getPlayerPhoto(player.name, player.photo, player.photoData);
-
-  // Current player's weekly points
-  const dbPlayer = allPlayers.find(p => p.name === player.name);
-  const weeklyPoints = dbPlayer ? (scores[dbPlayer.id] || 0) : 0;
-
+  // ── Render: main kid view ──────────────────────────────────
   return (
-    <div className="min-h-screen bg-gray-950 pb-24">
+    <div className="min-h-screen bg-slate-900 text-white">
 
-      {/* Sticky Header */}
-      <div className="bg-gray-900 border-b border-gray-800 p-4 sticky top-0 z-10 shadow-xl">
-        <div className="flex justify-between items-center gap-4 max-w-2xl mx-auto">
-          <button
-            onClick={() => { setEditName(player.name); setEditPhoto(player.photo || null); setEditPhotoData(player.photoData || null); setEditingProfile(true); }}
-            className="flex items-center gap-3 group text-left"
-          >
-            <div className="w-10 h-10 rounded-full overflow-hidden ring-2 ring-purple-700 group-hover:ring-purple-400 transition-all flex-shrink-0">
-              {playerPhoto
-                ? <img src={playerPhoto} alt={player.name} className="w-full h-full object-cover" />
-                : <div className="w-full h-full bg-gray-700 flex items-center justify-center text-lg">👤</div>}
-            </div>
-            <div>
-              <div className="flex items-center gap-1">
-                <h1 className="text-sm font-bold text-gray-100 leading-tight">{greeting}</h1>
-                <span className="text-xs text-gray-600">✏️</span>
-              </div>
-              <p className="text-xs text-gray-600 mt-0.5">Week {weekId}</p>
-            </div>
-          </button>
-          <div className="flex flex-col gap-1 items-end shrink-0">
-            <button onClick={onSignOut} className="px-3 py-1.5 bg-red-600 text-white text-xs rounded-lg hover:bg-red-700 transition-colors">Sign Out</button>
-            <button onClick={handleDeleteAccount} className="px-3 py-1 bg-gray-800 text-red-500 text-xs rounded-lg hover:bg-gray-700 transition-colors">Delete Account</button>
+      {/* ── Header ── */}
+      <div className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
+        <div className="max-w-lg mx-auto px-4 py-4 flex justify-between items-center">
+          <div>
+            <p className="text-slate-400 text-xs">{getGreeting()},</p>
+            <h1 className="text-xl font-black">{KID_NAME} 👾</h1>
+          </div>
+          <div className="text-right">
+            {streak > 0 && (
+              <p className="text-orange-400 text-xs font-bold mb-1">🔥 {streak} day streak</p>
+            )}
+            <button
+              onClick={() => setShowPinModal(true)}
+              className="text-xs text-slate-600 hover:text-slate-400 transition-colors"
+            >
+              🔒 Parent
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Profile Edit Modal */}
-      {editingProfile && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-            <h2 className="text-lg font-bold text-white mb-5 text-center">Edit Profile</h2>
-            <div className="flex justify-center mb-4">
-              <div className="w-24 h-24 rounded-full overflow-hidden ring-4 ring-purple-500">
-                {(() => { const src = getPlayerPhoto(editName, editPhoto, editPhotoData); return src ? <img src={src} alt="preview" className="w-full h-full object-cover" /> : <div className="w-full h-full bg-gray-700 flex items-center justify-center text-3xl">👤</div>; })()}
+      {/* ── XP / Points card ── */}
+      <div className="max-w-lg mx-auto px-4 pt-5 pb-3">
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-5">
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Today's XP</p>
+              <div className="flex items-baseline gap-2">
+                <span className="text-4xl font-black text-yellow-400">{totalPoints}</span>
+                <span className="text-slate-500 text-sm">/ {MAX_POINTS} pts</span>
               </div>
             </div>
-            <div className="flex justify-center mb-4">
-              <label className="cursor-pointer px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-lg transition-colors">
-                📷 Upload Photo
-                <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
-              </label>
+            <span className="text-4xl">{getProgressEmoji(progressPct)}</span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full bg-slate-700 rounded-full h-5 overflow-hidden">
+            <div
+              className="h-5 rounded-full transition-all duration-700 ease-out relative overflow-hidden"
+              style={{
+                width: `${progressPct}%`,
+                background: getProgressGradient(progressPct),
+                minWidth: progressPct > 0 ? '2rem' : '0',
+              }}
+            >
+              {progressPct >= 15 && (
+                <span className="absolute right-2 top-0 h-full flex items-center text-xs font-bold text-white/80">
+                  {progressPct}%
+                </span>
+              )}
             </div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 text-center">Or pick a preset</p>
-            <div className="flex gap-3 justify-center mb-5">
-              {ALL_PHOTOS.map(p => (
-                <button key={p.filename} onClick={() => { setEditPhoto(p.filename); setEditPhotoData(null); }}
-                  className={`w-14 h-14 rounded-xl overflow-hidden transition-all ${!editPhotoData && editPhoto === p.filename ? 'ring-4 ring-purple-500 scale-105' : 'opacity-50 hover:opacity-80'}`}>
-                  <img src={p.src} alt={p.label} className="w-full h-full object-cover" />
-                </button>
-              ))}
+          </div>
+
+          {progressPct >= 100 && (
+            <p className="text-center text-yellow-400 font-bold text-sm mt-3 animate-pulse">
+              🏆 PERFECT DAY — ALL TASKS DONE! 🏆
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* ── Task Sections ── */}
+      <div className="max-w-lg mx-auto px-4 pb-10 space-y-4">
+        <TaskSection
+          title="☀️ Morning Routine"
+          tasks={morningTasks}
+          completed={completed}
+          onToggle={handleToggle}
+          accentColor="yellow"
+          justChecked={justChecked}
+        />
+        <TaskSection
+          title="📚 Afternoon"
+          tasks={afternoonTasks}
+          completed={completed}
+          onToggle={handleToggle}
+          accentColor="blue"
+          justChecked={justChecked}
+        />
+        <TaskSection
+          title="🌙 Evening Routine"
+          tasks={eveningTasks}
+          completed={completed}
+          onToggle={handleToggle}
+          accentColor="purple"
+          justChecked={justChecked}
+        />
+      </div>
+
+      {/* Date footer */}
+      <div className="text-center pb-8">
+        <p className="text-slate-700 text-xs">
+          {new Date().toLocaleDateString('en-US', {
+            weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+          })}
+        </p>
+      </div>
+
+      {/* ── Parent PIN Modal ── */}
+      {showPinModal && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+          onClick={(e) => e.target === e.currentTarget && closePinModal()}
+        >
+          <div className="bg-slate-800 rounded-2xl p-6 w-full max-w-xs border border-slate-600 shadow-2xl">
+            <div className="text-center mb-5">
+              <div className="text-4xl mb-2">🔒</div>
+              <h3 className="text-lg font-bold">Parent Access</h3>
+              <p className="text-slate-400 text-sm mt-1">
+                Enter your PIN to see {KID_NAME}'s progress
+              </p>
             </div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Name</p>
-            <input type="text" value={editName} onChange={e => setEditName(e.target.value)}
-              className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl focus:outline-none focus:border-purple-500 text-gray-100 mb-5" />
+            <input
+              type="password"
+              inputMode="numeric"
+              value={pinInput}
+              onChange={(e) => { setPinInput(e.target.value); setPinError(''); }}
+              onKeyDown={(e) => e.key === 'Enter' && handleParentUnlock()}
+              placeholder="••••"
+              maxLength={6}
+              className="w-full bg-slate-700 border border-slate-600 rounded-xl px-4 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:border-blue-500 mb-3 text-white"
+              autoFocus
+            />
+            {pinError && (
+              <p className="text-red-400 text-sm text-center mb-3">{pinError}</p>
+            )}
             <div className="flex gap-3">
-              <button onClick={() => setEditingProfile(false)} className="flex-1 py-2.5 bg-gray-800 text-gray-300 rounded-xl font-semibold hover:bg-gray-700 transition-colors border border-gray-700">Cancel</button>
-              <button onClick={handleSaveProfile} disabled={savingProfile || !editName.trim() || editName.trim().length < 2}
-                className="flex-1 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-semibold hover:opacity-90 transition-all disabled:opacity-50">
-                {savingProfile ? 'Saving...' : 'Save'}
+              <button
+                onClick={closePinModal}
+                className="flex-1 py-3 rounded-xl bg-slate-700 text-slate-300 hover:bg-slate-600 transition-colors font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleParentUnlock}
+                className="flex-1 py-3 rounded-xl bg-blue-600 text-white hover:bg-blue-500 transition-colors font-bold"
+              >
+                Enter
               </button>
             </div>
           </div>
         </div>
       )}
-
-      {/* Winner Announcement Modal */}
-      {showWinnerModal && winner && (() => {
-        const msgIdx = weekId.charCodeAt(weekId.length - 1) % WINNER_MESSAGES.length;
-        const message = WINNER_MESSAGES[msgIdx](winner.name);
-        const photo = getPlayerPhoto(winner.name, winner.name === player.name ? player.photo : null, winner.name === player.name ? player.photoData : null);
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 px-4">
-            <div className="bg-gray-900 border-2 border-yellow-500/40 rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center relative overflow-hidden">
-              <div className="absolute inset-0 bg-gradient-to-b from-yellow-500/10 to-transparent pointer-events-none" />
-              <div className="text-6xl mb-2 animate-bounce">🏆</div>
-              <div className="flex justify-center gap-1 mb-4">
-                {[0,1,2,3,4].map(i => (
-                  <span key={i} className="text-xl animate-pulse" style={{ animationDelay: `${i * 0.15}s` }}>⭐</span>
-                ))}
-              </div>
-              <p className="text-yellow-400 font-bold text-xs uppercase tracking-widest mb-4">🎉 Week Winner 🎉</p>
-              <div className="w-24 h-24 rounded-full overflow-hidden ring-4 ring-yellow-400 mx-auto mb-4 shadow-lg shadow-yellow-500/30">
-                {photo
-                  ? <img src={photo} alt={winner.name} className="w-full h-full object-cover" />
-                  : <div className="w-full h-full bg-gradient-to-br from-yellow-400 to-orange-500 flex items-center justify-center text-4xl">👑</div>}
-              </div>
-              <h2 className="text-4xl font-black text-white mb-1">{winner.name}</h2>
-              <p className="text-yellow-400 text-2xl font-bold mb-5">{winner.points} pts</p>
-              <p className="text-gray-300 text-sm mb-7 italic leading-relaxed px-2">"{message}"</p>
-              <button
-                onClick={() => { setShowWinnerModal(false); localStorage.setItem(`winner_dismissed_${weekId}`, '1'); }}
-                className="w-full py-4 bg-gradient-to-r from-yellow-500 to-orange-500 text-white font-black rounded-2xl text-base hover:opacity-90 active:scale-95 transition-all shadow-lg shadow-orange-500/30"
-              >
-                🎉 Let's GOOO!
-              </button>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Tab Content */}
-      <div className="px-4 pt-4 max-w-2xl mx-auto">
-
-        {/* ── HOME TAB ── */}
-        {activeTab === 'home' && (
-          <div className="space-y-4">
-            {/* Weekly points hero */}
-            <div className="bg-gray-800 rounded-2xl p-5 border border-gray-700/50 flex items-center gap-4">
-              <div className="w-16 h-16 rounded-full overflow-hidden ring-4 ring-purple-600 flex-shrink-0">
-                {playerPhoto
-                  ? <img src={playerPhoto} alt={player.name} className="w-full h-full object-cover" />
-                  : <div className="w-full h-full bg-gray-700 flex items-center justify-center text-2xl">👤</div>}
-              </div>
-              <div>
-                <p className="text-gray-400 text-sm">This week</p>
-                <p className="text-4xl font-bold text-white">{weeklyPoints}<span className="text-lg text-gray-500 font-normal ml-1">pts</span></p>
-                <p className="text-xs text-gray-600 mt-0.5">{todayCompletions.length} task{todayCompletions.length !== 1 ? 's' : ''} done today</p>
-              </div>
-            </div>
-
-            {/* Mini Leaderboard */}
-            {miniLeaderboard.length > 0 && (
-              <div className="bg-gray-800 rounded-xl border border-gray-700/50 overflow-hidden">
-                <div className="px-4 py-3 border-b border-gray-700/30 flex items-center justify-between">
-                  <h3 className="font-bold text-white text-sm">🏆 Standings</h3>
-                  <button onClick={() => setActiveTab('scores')} className="text-xs text-purple-400 hover:text-purple-300 transition-colors">Full view →</button>
-                </div>
-                <div className="divide-y divide-gray-700/30">
-                  {miniLeaderboard.map((entry, idx) => {
-                    const medals = ['🥇', '🥈', '🥉'];
-                    const isMe = entry.name === player.name;
-                    const photo = getPlayerPhoto(entry.name, isMe ? player.photo : null, isMe ? player.photoData : null);
-                    return (
-                      <div key={entry.id} className={`flex items-center gap-3 px-4 py-2.5 ${isMe ? 'bg-purple-900/20' : ''}`}>
-                        <span className="text-base w-6 text-center">{medals[idx] || `#${idx + 1}`}</span>
-                        <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 bg-gray-600">
-                          {photo
-                            ? <img src={photo} alt={entry.name} className="w-full h-full object-cover" />
-                            : <div className="w-full h-full flex items-center justify-center text-sm">👤</div>}
-                        </div>
-                        <span className={`flex-1 text-sm font-semibold ${isMe ? 'text-purple-300' : 'text-gray-300'}`}>{entry.name}</span>
-                        <span className={`text-sm font-bold ${entry.points > 0 ? 'text-white' : 'text-gray-600'}`}>
-                          {entry.points > 0 ? `${entry.points} pts` : '—'}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Today's Activity — all players */}
-            {(() => {
-              const byPlayer = {};
-              todayAllCompletions.forEach(c => {
-                if (!byPlayer[c.playerName]) byPlayer[c.playerName] = [];
-                byPlayer[c.playerName].push(c);
-              });
-              const hasActivity = Object.keys(byPlayer).length > 0;
-              return (
-                <div className="bg-gray-800 rounded-xl border border-gray-700/50 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-gray-700/30 flex items-center gap-2">
-                    <h3 className="font-bold text-white text-sm">👥 Today's Activity</h3>
-                    {todayAllCompletions.length > 0 && (
-                      <span className="text-xs bg-green-900/60 text-green-400 font-semibold px-2 py-0.5 rounded-full">{todayAllCompletions.length}</span>
-                    )}
-                  </div>
-                  {hasActivity ? (
-                    Object.entries(byPlayer).map(([name, playerTasks]) => {
-                      const isMe = name === player.name;
-                      const photo = getPlayerPhoto(name, isMe ? player.photo : null, isMe ? player.photoData : null);
-                      return (
-                        <div key={name} className="border-b border-gray-700/30 last:border-0">
-                          <div className={`flex items-center gap-2 px-4 py-2.5 ${isMe ? 'bg-purple-900/10' : ''}`}>
-                            <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 bg-gray-600">
-                              {photo
-                                ? <img src={photo} alt={name} className="w-full h-full object-cover" />
-                                : <div className="w-full h-full flex items-center justify-center text-xs">👤</div>}
-                            </div>
-                            <span className={`text-sm font-bold ${isMe ? 'text-purple-300' : 'text-gray-200'}`}>{name}</span>
-                            <span className="text-xs bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded-full ml-1">
-                              {playerTasks.length} task{playerTasks.length !== 1 ? 's' : ''}
-                            </span>
-                          </div>
-                          <div className="px-4 pb-3 space-y-1.5">
-                            {playerTasks.map(c => (
-                              <div key={c.id} className="flex items-center justify-between bg-gray-700/40 rounded-lg px-3 py-1.5">
-                                <span className="text-xs text-gray-300 flex-1 mr-2">{c.taskName}</span>
-                                <div className="flex items-center gap-2 flex-shrink-0">
-                                  <span className="text-xs text-green-400 font-semibold">+{c.taskPoints}</span>
-                                  {isMe && (
-                                    <button onClick={() => handleDeleteCompletion(c.task_id, c.taskPoints)}
-                                      className="text-red-500 hover:text-red-400 text-sm transition-colors" title="Remove">🗑️</button>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="p-6 text-center">
-                      <p className="text-2xl mb-2">😴</p>
-                      <p className="text-gray-400 text-sm">No tasks completed today yet.</p>
-                      <p className="text-gray-600 text-xs mt-1">Head to Chores and get some points!</p>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-        )}
-
-        {/* ── SCORES TAB ── */}
-        {activeTab === 'scores' && (
-          <div className="space-y-4">
-            <Leaderboard scores={scores} player={player} />
-            <Reactions player={player} />
-          </div>
-        )}
-
-        {/* ── CHALLENGES TAB ── */}
-        {activeTab === 'challenges' && (
-          <Challenges player={player} weekId={weekId} />
-        )}
-
-        {/* ── CHORES TAB ── */}
-        {activeTab === 'chores' && (
-          <div className="space-y-3">
-            {/* Search */}
-            <div className="bg-gray-800 rounded-xl p-4 border border-gray-700/50">
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">🔍</span>
-                <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search tasks..."
-                  className="w-full pl-8 pr-8 py-2.5 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-purple-500 text-sm text-gray-200 placeholder-gray-500" />
-                {searchQuery && (
-                  <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-sm">✕</button>
-                )}
-              </div>
-            </div>
-
-            {/* Categories */}
-            <div className="bg-gray-800 rounded-xl p-4 border border-gray-700/50">
-              <h2 className="font-bold text-gray-100 mb-3">📋 Categories</h2>
-              <div className="flex flex-wrap gap-2">
-                {categories.map(cat => (
-                  <button key={cat} onClick={() => setSelectedCategory(cat)}
-                    className={`px-3 py-2 rounded-lg font-medium transition-all text-sm ${selectedCategory === cat ? 'bg-purple-600 text-white shadow-lg' : 'bg-gray-700 text-gray-400 hover:text-gray-200'}`}>
-                    {cat}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <TaskList
-              tasks={filteredTasks}
-              player={player}
-              onTaskComplete={() => { fetchScores(weekId); fetchCompletions(weekId); }}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Bottom Tab Bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-20 bg-gray-900 border-t border-gray-800">
-        <div className="flex max-w-2xl mx-auto">
-          {TABS.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex-1 flex flex-col items-center py-3 gap-0.5 transition-all ${
-                activeTab === tab.id ? 'text-purple-400' : 'text-gray-600 hover:text-gray-400'
-              }`}
-            >
-              <span className={`text-2xl transition-transform ${activeTab === tab.id ? 'scale-110' : ''}`}>{tab.icon}</span>
-              <span className={`text-xs font-semibold ${activeTab === tab.id ? 'text-purple-400' : 'text-gray-600'}`}>{tab.label}</span>
-              {activeTab === tab.id && <div className="w-1 h-1 rounded-full bg-purple-400 mt-0.5" />}
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

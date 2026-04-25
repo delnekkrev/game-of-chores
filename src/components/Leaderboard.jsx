@@ -1,96 +1,277 @@
-import React, { useEffect, useState } from 'react';
-import { supabase } from '../App';
-import { PROFILE_NAMES, PROFILE_CONFIG, getPlayerPhoto } from '../profileConfig';
+import React, { useEffect, useState, useCallback } from 'react';
+import { supabase, DAILY_TASKS, MAX_POINTS, KID_NAME } from '../App';
 
-const MEDALS = ['🥇', '🥈', '🥉'];
-const MAX_BAR_HEIGHT = 130;
+function getTodayId() {
+  return new Date().toISOString().split('T')[0];
+}
 
-export default function Leaderboard({ scores, player }) {
-  const [dbPlayers, setDbPlayers] = useState([]);
+function getLast7Days() {
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    return d.toISOString().split('T')[0];
+  }).reverse(); // oldest → newest
+}
 
-  useEffect(() => {
-    fetchPlayers();
-  }, [scores]);
+function formatDayLabel(dateStr, todayId) {
+  if (dateStr === todayId) return 'Today';
+  const diffDays = Math.round(
+    (new Date(todayId) - new Date(dateStr + 'T12:00:00')) / 86_400_000
+  );
+  if (diffDays === 1) return 'Yesterday';
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
 
-  const fetchPlayers = async () => {
-    const { data, error } = await supabase.from('players').select('*');
-    if (!error && data) setDbPlayers(data);
-  };
+function formatTime(ts) {
+  return new Date(ts).toLocaleTimeString('en-US', {
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
+}
 
-  const entries = PROFILE_NAMES.map(name => {
-    const dbPlayer = dbPlayers.find(p => p.name === name);
-    const points = dbPlayer ? (scores[dbPlayer.id] || 0) : 0;
-    return { name, points, config: PROFILE_CONFIG[name] };
-  }).sort((a, b) => b.points - a.points);
+export default function ParentView({ onBack }) {
+  const [dayData, setDayData] = useState({});
+  const [loading, setLoading] = useState(true);
 
-  const maxPoints = Math.max(...entries.map(e => e.points), 1);
-  const topPoints = entries[0].points;
-  const currentEntry = entries.find(e => e.name === player.name);
-  const isLeading = currentEntry && currentEntry.points === topPoints && topPoints > 0;
-  const leaderName = entries[0].name;
-  const gap = topPoints - (currentEntry?.points || 0);
+  const todayId = getTodayId();
+  const last7   = getLast7Days();
 
+  const loadData = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('daily_completions')
+      .select('task_id, date_id, completed_at')
+      .in('date_id', last7)
+      .order('completed_at', { ascending: false });
+
+    if (!error && data) {
+      const grouped = Object.fromEntries(last7.map(d => [d, []]));
+      data.forEach(c => { if (grouped[c.date_id]) grouped[c.date_id].push(c); });
+      setDayData(grouped);
+    }
+    setLoading(false);
+  }, []); // eslint-disable-line
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // ── Helpers ─────────────────────────────────────────────────
+  const getPoints = (dateId) =>
+    (dayData[dateId] || []).reduce((sum, c) => {
+      const task = DAILY_TASKS.find(t => t.id === c.task_id);
+      return sum + (task?.points || 0);
+    }, 0);
+
+  const todayCompletions  = dayData[todayId] || [];
+  const todayPoints       = getPoints(todayId);
+  const todayPct          = Math.min(100, Math.round((todayPoints / MAX_POINTS) * 100));
+  const completedTodayIds = new Set(todayCompletions.map(c => c.task_id));
+  const missingToday      = DAILY_TASKS.filter(t => !completedTodayIds.has(t.id));
+
+  // Streak: consecutive days (oldest to yesterday) with activity, + today if active
+  const streak = (() => {
+    let s = 0;
+    for (let i = last7.length - 2; i >= 0; i--) {
+      if ((dayData[last7[i]] || []).length > 0) s++;
+      else break;
+    }
+    if (todayCompletions.length > 0) s++;
+    return s;
+  })();
+
+  // ── Loading ─────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <p className="text-white text-lg animate-pulse">Loading progress... 📊</p>
+      </div>
+    );
+  }
+
+  // ── Main view ───────────────────────────────────────────────
   return (
-    <div className="bg-gray-800 rounded-2xl p-5 shadow-lg border border-gray-700/50">
-      <h2 className="text-xl font-bold text-white mb-1 text-center">🏆 Leaderboard</h2>
-      <p className="text-xs text-center text-gray-500 mb-6">Week standings</p>
+    <div className="min-h-screen bg-slate-900 text-white">
 
-      <div className="flex items-end justify-center gap-4 px-2">
-        {entries.map((entry, idx) => {
-          const isCurrentPlayer = entry.name === player.name;
-          const barHeight = entry.points > 0
-            ? Math.max((entry.points / maxPoints) * MAX_BAR_HEIGHT, 20)
-            : 12;
-          const photo = getPlayerPhoto(entry.name, player.name === entry.name ? player.photo : null);
-
-          return (
-            <div key={entry.name} className="flex flex-col items-center gap-1 flex-1">
-              <div className="text-2xl">{MEDALS[idx]}</div>
-              <div className={`text-sm font-bold ${isCurrentPlayer ? 'text-purple-400' : 'text-gray-300'}`}>
-                {entry.points > 0 ? entry.points : '—'}
-              </div>
-
-              <div className="w-full flex items-end" style={{ height: `${MAX_BAR_HEIGHT}px` }}>
-                <div
-                  className={`w-full rounded-t-xl bg-gradient-to-t ${entry.config.barColor} transition-all duration-700 relative ${
-                    isCurrentPlayer ? `shadow-lg ${entry.config.glowColor} ring-2 ring-white/20` : 'opacity-80'
-                  }`}
-                  style={{ height: `${barHeight}px` }}
-                >
-                  {isCurrentPlayer && (
-                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-yellow-400 rounded-full border-2 border-gray-800" />
-                  )}
-                </div>
-              </div>
-
-              <div className={`flex flex-col items-center gap-1 pt-1 pb-1 ${isCurrentPlayer ? 'scale-110' : ''} transition-transform`}>
-                <div className={`w-12 h-12 rounded-xl overflow-hidden shadow-md ${
-                  isCurrentPlayer ? `ring-2 ring-purple-400 shadow-lg` : 'opacity-80'
-                }`}>
-                  {photo
-                    ? <img src={photo} alt={entry.name} className="w-full h-full object-cover" />
-                    : <div className={`w-full h-full bg-gradient-to-br ${entry.config.barColor} flex items-center justify-center text-2xl`}>👤</div>
-                  }
-                </div>
-                <p className={`text-xs font-bold ${isCurrentPlayer ? 'text-purple-400' : 'text-gray-400'}`}>{entry.name}</p>
-                <p className="text-xs text-gray-600">pts</p>
-              </div>
-            </div>
-          );
-        })}
+      {/* Header */}
+      <div className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
+        <div className="max-w-lg mx-auto px-4 py-4 flex items-center gap-3">
+          <button
+            onClick={onBack}
+            className="text-slate-400 hover:text-white transition-colors text-sm px-2 py-1"
+          >
+            ← Back
+          </button>
+          <div>
+            <h1 className="font-black text-lg">{KID_NAME}'s Progress 📊</h1>
+            <p className="text-slate-400 text-xs">
+              {new Date().toLocaleDateString('en-US', {
+                weekday: 'long', month: 'long', day: 'numeric',
+              })}
+            </p>
+          </div>
+        </div>
       </div>
 
-      {topPoints > 0 && (
-        <div className={`mt-5 p-3 rounded-xl text-sm text-center font-medium ${
-          isLeading
-            ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-            : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
-        }`}>
-          {isLeading
-            ? `🔥 You're crushing it, ${player.name}! Keep the streak alive!`
-            : `💨 ${leaderName} is ahead by ${gap} pts — time to grind! 💪`}
+      <div className="max-w-lg mx-auto px-4 py-4 space-y-4 pb-10">
+
+        {/* ── Today's summary ── */}
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 p-5">
+          <h2 className="text-slate-400 text-xs uppercase tracking-wider font-bold mb-4">
+            Today's Summary
+          </h2>
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="bg-slate-700 rounded-xl p-3 text-center">
+              <p className="text-2xl font-black text-yellow-400">{todayPoints}</p>
+              <p className="text-xs text-slate-400 mt-1">Points</p>
+            </div>
+            <div className="bg-slate-700 rounded-xl p-3 text-center">
+              <p className="text-2xl font-black text-green-400">{todayCompletions.length}</p>
+              <p className="text-xs text-slate-400 mt-1">Done</p>
+            </div>
+            <div className="bg-slate-700 rounded-xl p-3 text-center">
+              <p className="text-2xl font-black text-orange-400">
+                {streak > 0 ? `${streak}🔥` : '—'}
+              </p>
+              <p className="text-xs text-slate-400 mt-1">Streak</p>
+            </div>
+          </div>
+          <div className="bg-slate-700 rounded-full h-3 overflow-hidden">
+            <div
+              className="h-3 rounded-full bg-gradient-to-r from-blue-500 to-green-400 transition-all duration-500"
+              style={{ width: `${todayPct}%` }}
+            />
+          </div>
+          <p className="text-slate-500 text-xs text-right mt-1">
+            {todayPct}% of daily goal ({MAX_POINTS} pts possible)
+          </p>
         </div>
-      )}
+
+        {/* ── Today's checkoffs ── */}
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
+          <div className="px-5 py-3 border-b border-slate-700">
+            <h2 className="text-slate-400 text-xs uppercase tracking-wider font-bold">
+              Today's Checkoffs{todayCompletions.length > 0 && ` (${todayCompletions.length})`}
+            </h2>
+          </div>
+          <div className="p-3">
+            {todayCompletions.length === 0 ? (
+              <div className="text-center py-6 text-slate-500">
+                <p className="text-3xl mb-2">💤</p>
+                <p>Nothing checked off yet today</p>
+              </div>
+            ) : (
+              <div className="space-y-0.5">
+                {todayCompletions.map(c => {
+                  const task = DAILY_TASKS.find(t => t.id === c.task_id);
+                  if (!task) return null;
+                  return (
+                    <div
+                      key={c.task_id}
+                      className="flex items-center justify-between py-2 px-2 rounded-lg hover:bg-slate-700/50 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-green-500 text-xs">✓</span>
+                        <span className="text-base">{task.emoji}</span>
+                        <span className="text-sm">{task.name}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="text-yellow-400 font-bold">+{task.points}</span>
+                        <span className="text-slate-500">{formatTime(c.completed_at)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── Still to do / perfect day ── */}
+        {missingToday.length === 0 && todayCompletions.length > 0 ? (
+          <div className="bg-green-900/30 border border-green-500/30 rounded-2xl p-6 text-center">
+            <p className="text-4xl mb-2">🏆</p>
+            <p className="text-green-400 font-black text-lg">Perfect Day!</p>
+            <p className="text-slate-400 text-sm mt-1">
+              All {DAILY_TASKS.length} tasks completed!
+            </p>
+          </div>
+        ) : missingToday.length > 0 ? (
+          <div className="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
+            <div className="px-5 py-3 border-b border-slate-700">
+              <h2 className="text-slate-400 text-xs uppercase tracking-wider font-bold">
+                Still To Do ({missingToday.length})
+              </h2>
+            </div>
+            <div className="p-3 space-y-0.5">
+              {missingToday.map(task => (
+                <div
+                  key={task.id}
+                  className="flex items-center justify-between py-2 px-2 text-slate-400"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-600 text-xs">○</span>
+                    <span className="text-base">{task.emoji}</span>
+                    <span className="text-sm">{task.name}</span>
+                  </div>
+                  <span className="text-slate-500 text-xs">+{task.points} pts</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* ── 7-day history ── */}
+        <div className="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
+          <div className="px-5 py-3 border-b border-slate-700">
+            <h2 className="text-slate-400 text-xs uppercase tracking-wider font-bold">
+              Last 7 Days
+            </h2>
+          </div>
+          <div className="p-3 space-y-2">
+            {last7.map(dateStr => {
+              const pts     = getPoints(dateStr);
+              const pct     = Math.round((pts / MAX_POINTS) * 100);
+              const count   = (dayData[dateStr] || []).length;
+              const isToday = dateStr === todayId;
+
+              return (
+                <div
+                  key={dateStr}
+                  className={`p-3 rounded-xl ${
+                    isToday
+                      ? 'bg-blue-900/20 border border-blue-500/20'
+                      : 'bg-slate-700/30'
+                  }`}
+                >
+                  <div className="flex justify-between items-center mb-2">
+                    <span className={`text-sm font-semibold ${isToday ? 'text-blue-300' : 'text-white'}`}>
+                      {formatDayLabel(dateStr, todayId)}
+                    </span>
+                    <span className={`text-sm font-bold ${pts > 0 ? 'text-yellow-400' : 'text-slate-600'}`}>
+                      {pts > 0 ? `${pts} pts` : '—'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 bg-slate-600 rounded-full h-2 overflow-hidden">
+                      <div
+                        className={`h-2 rounded-full transition-all ${
+                          pct >= 80 ? 'bg-green-400' :
+                          pct >= 50 ? 'bg-blue-400'  :
+                          pct >  0  ? 'bg-yellow-400' :
+                          'bg-slate-600'
+                        }`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-slate-400 w-20 text-right flex-shrink-0">
+                      {count > 0 ? `${count}/${DAILY_TASKS.length} tasks` : 'nothing done'}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+      </div>
     </div>
   );
 }
