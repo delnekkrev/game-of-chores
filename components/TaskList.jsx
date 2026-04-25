@@ -1,56 +1,48 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import TaskItem from './TaskItem';
 
-export default function TaskList({ tasks, player, onTaskComplete }) {
-  const [groupedTasks, setGroupedTasks] = useState({});
-  const [completedCount, setCompletedCount] = useState(0);
+const ACCENT = {
+  yellow: { border: 'border-yellow-500/20', header: 'text-yellow-400' },
+  blue:   { border: 'border-blue-500/20',   header: 'text-blue-400'   },
+  purple: { border: 'border-purple-500/20', header: 'text-purple-400' },
+};
 
-  useEffect(() => {
-    // Group tasks by category
-    const grouped = {};
-    tasks.forEach(task => {
-      if (!grouped[task.category]) {
-        grouped[task.category] = [];
-      }
-      grouped[task.category].push(task);
-    });
-    setGroupedTasks(grouped);
-  }, [tasks]);
-
-  const handleTaskComplete = () => {
-    setCompletedCount(prev => prev + 1);
-    onTaskComplete();
-  };
-
-  const categories = Object.keys(groupedTasks);
-
-  if (categories.length === 0) {
-    return (
-      <div className="bg-white/90 backdrop-blur-sm rounded-xl p-8 text-center">
-        <p className="text-gray-600 text-lg">📭 No tasks in this category</p>
-      </div>
-    );
-  }
+export default function TaskSection({ title, tasks, completed, onToggle, accentColor = 'blue', justChecked }) {
+  const style = ACCENT[accentColor] || ACCENT.blue;
+  const doneTasks = tasks.filter(t => completed.has(t.id));
+  const sectionPts = doneTasks.reduce((s, t) => s + t.points, 0);
+  const maxPts     = tasks.reduce((s, t) => s + t.points, 0);
+  const allDone    = doneTasks.length === tasks.length;
 
   return (
-    <div className="space-y-6">
-      {categories.map(category => (
-        <div key={category} className="bg-white/90 backdrop-blur-sm rounded-xl p-6 shadow-lg">
-          <h3 className="text-lg font-bold text-gray-800 mb-4 pb-2 border-b-2 border-purple-300">
-            📌 {category}
-          </h3>
-          <div className="grid grid-cols-1 gap-3">
-            {groupedTasks[category].map(task => (
-              <TaskItem
-                key={task.id}
-                task={task}
-                player={player}
-                onComplete={handleTaskComplete}
-              />
-            ))}
-          </div>
+    <div className={`bg-slate-800 rounded-2xl border ${style.border} overflow-hidden`}>
+
+      {/* Section header */}
+      <div className="px-4 py-3 border-b border-slate-700 flex justify-between items-center">
+        <h2 className={`font-bold text-sm ${style.header}`}>
+          {title} {allDone && '✅'}
+        </h2>
+        <div className="text-xs text-slate-400 flex items-center gap-2">
+          <span>
+            <span className="text-yellow-400 font-bold">{sectionPts}</span>/{maxPts} pts
+          </span>
+          <span className="text-slate-600">·</span>
+          <span>{doneTasks.length}/{tasks.length}</span>
         </div>
-      ))}
+      </div>
+
+      {/* Task list */}
+      <div className="p-3 space-y-2">
+        {tasks.map(task => (
+          <TaskItem
+            key={task.id}
+            task={task}
+            isCompleted={completed.has(task.id)}
+            onToggle={onToggle}
+            justChecked={justChecked === task.id}
+          />
+        ))}
+      </div>
     </div>
   );
 }

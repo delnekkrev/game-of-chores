@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git -C /Users/Delnekkrev/Rewardy-Chores status)"
+      "Bash(git -C /Users/Delnekkrev/Rewardy-Chores status)",
+      "mcp__b0095894-91fa-4a63-80bc-f2e7317e2e27__netlify-project-services-reader",
+      "mcp__b0095894-91fa-4a63-80bc-f2e7317e2e27__netlify-project-services-updater",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(node -e ':*)"
     ]
   }
 }
